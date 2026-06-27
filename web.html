@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HMI SCADA - Motor Monitoring</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+
+        :root {
+            --danger-red: #ff2200;
+            --safe-green: #00ff55;
+            --warning-yellow: #ffbb00;
+            --lcd-bg: #101a1a;
+            --lcd-glow: #00f2fe;
+            --lcd-dim: rgba(0, 242, 254, 0.1);
+            --panel-bg: #161b22;
+            --accent-color: #00d4ff;
+            --warning-red: #e24f32;
+            --osc-green: #00ff55;
+        }
+
+        body {
+            background-color: #2a2d2d;
+            margin: 0; padding: 0;
+            height: 100vh; width: 100vw;
+            overflow: hidden;
+            position: relative;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiIHZpZXdCb3g9IjAgMCA0IDQiPjxnIGZpbGwtb3BhY2l0eT0iMC4wNSIgZmlsbD0iIzAwMDAwMCI+PHBhdGggZD0iTTEgM2gydjFIMVpNMCAwaDF2MUgwWk0zIDNoMXYxaC0xWk0yIDBoMXYxSDJaIj48L3BhdGg+PC9nPjwvc3ZnPg==');
+        }
+
+        /* --- CONNECTOR LINES STYLES --- */
+        .connector-line {
+            fill: none;
+            stroke-width: 2px;
+            stroke-dasharray: 6, 4; /* Garis putus-putus */
+            opacity: 0.7;
+            transition: stroke 0.3s ease;
+        }
+        .connector-dot {
+            opacity: 0.9;
+            transition: fill 0.3s ease;
+        }
+
+        /* --- TOMBOL KONEKSI UART SERIAL --- */
+        .btn-connect {
+            position: absolute; top: 15px; left: 15px; padding: 10px 20px;
+            background-color: #0078d4; color: white; border: none; border-radius: 6px;
+            font-weight: bold; cursor: pointer; z-index: 100;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: background 0.2s;
+        }
+        .btn-connect:hover { background-color: #005a9e; }
+        .btn-connect.connected { background-color: var(--safe-green); color: #111; }
+
+        /* --- STATUS INFO (DEBUG KONEKSI) --- */
+        .conn-status {
+            position: absolute; top: 15px; left: 200px; z-index: 100;
+            color: #ccc; font-size: 0.75rem; font-family: monospace;
+            background: rgba(0,0,0,0.4); padding: 8px 14px; border-radius: 6px;
+        }
+
+        /* --- GROUPING ELEMEN MOTOR --- */
+        .motor-group {
+            position: absolute; 
+            top: 60px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            width: 450px; 
+            z-index: 2;
+        }
+        .motor-display { 
+            width: 100%; 
+            height: auto; 
+            display: block;
+        }
+        .fan-container { 
+            position: absolute; 
+            top: 125px; 
+            left: 355px; 
+            transform: translate(-50%, -50%); 
+            z-index: 5; 
+        }
+        .fan-circle { 
+            width: 45px; height: 45px; background: #111; border: 2px solid #444; border-radius: 50%; 
+            display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5); 
+        }
+        .spinning { width: 45px; height: auto; animation: rotate 1s linear infinite; animation-play-state: paused; }
+        @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        /* --- LAYOUT GRID BAWAH --- */
+        .dashboard-grid { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: stretch; gap: 20px; z-index: 10; width: 95%; justify-content: center;}
+        
+        .gauge-container { position: relative; transform: scale(0.65); transform-origin: center center; width: 220px; height: 220px; display: flex; justify-content: center; align-items: center; }
+        
+        .charts-column { display: flex; flex-direction: column; gap: 15px; width: 480px; justify-content: center; }
+        .fft-panel { background: #161b22; width: 100%; height: 165px; padding: 10px; border-radius: 12px; border: 2px solid #30363d; box-shadow: 0 10px 20px rgba(0,0,0,0.4); box-sizing: border-box; position: relative; }
+        
+        .vibration-panel { background: linear-gradient(145deg, #323842, #242931); padding: 15px; border-radius: 12px; border: 2px solid #1a1e24; box-shadow: 0 10px 20px rgba(0,0,0,0.4); width: 240px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; position: relative;}
+        .temp-panel { background: #161b22; width: 180px; padding: 10px; border-radius: 12px; border: 2px solid #30363d; box-shadow: 0 10px 20px rgba(0,0,0,0.4); display: flex; flex-direction: column; align-items: center; box-sizing: border-box; justify-content: center; position: relative;}
+
+        /* --- GAUGE RPM DESAIN --- */
+        .gauge-bezel { width: 350px; height: 350px; background: linear-gradient(145deg, #666, #222, #444); border-radius: 50%; display: flex; justify-content: center; align-items: center; box-shadow: 0 20px 50px rgba(0,0,0,0.9); position: relative; }
+        .gauge-body { width: 310px; height: 310px; background: radial-gradient(circle, #222 0%, #000 100%); border-radius: 50%; position: relative; border: 6px solid #111; overflow: hidden; }
+        .tick-wrapper { position: absolute; top: 50%; left: 50%; height: 280px; width: 2px; transform-origin: center center; }
+        .tick { width: 100%; height: 12px; background: #555; }
+        .tick.major { width: 4px; height: 18px; background: #eee; margin-left: -1px; }
+        .number-label { position: absolute; top: 50%; left: 50%; width: 40px; height: 40px; margin-left: -20px; margin-top: -20px; text-align: center; font-size: 18px; font-weight: bold; color: #777; }
+        .number-label.danger { color: var(--danger-red); }
+        .needle { position: absolute; width: 4px; height: 130px; background: linear-gradient(to top, #ff0000, #ff6666); bottom: 50%; left: calc(50% - 2px); transform-origin: bottom center; transform: rotate(-120deg); transition: transform 0.3s ease-out; z-index: 10; border-radius: 4px; }
+        .needle-pivot { position: absolute; width: 30px; height: 30px; background: radial-gradient(circle, #444, #000); border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 15; }
+        .color-arc { position: absolute; width: 100%; height: 100%; border-radius: 50%; background: conic-gradient(from -120deg, var(--safe-green) 0deg, var(--warning-yellow) 144deg, var(--danger-red) 145deg, var(--danger-red) 240deg, transparent 240deg); mask: radial-gradient(circle, transparent 66%, black 67%); -webkit-mask: radial-gradient(circle, transparent 66%, black 67%); opacity: 0.4; }
+        #rpm-val { font-size: 35px; font-weight: bold; color: #fff; font-family: monospace; }
+        .data-display { position: absolute; width: 100%; bottom: 50px; text-align: center; z-index: 5; }
+        .label-rpm { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* --- VIBRASI & LCD DESAIN --- */
+        .vib-title { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; margin-bottom: 12px; text-align: center; border-bottom: 1px solid #444; padding-bottom: 5px; }
+        .axis-container { margin-bottom: 10px; }
+        .axis-label { color: #888; font-size: 10px; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; display: block; }
+        .lcd-screen { background-color: var(--lcd-bg); border: 2px solid #1a1a1a; border-style: inset; border-radius: 4px; padding: 4px 10px; display: flex; justify-content: space-between; align-items: center; position: relative; overflow: hidden; }
+        .val-group { position: relative; display: flex; align-items: baseline; height: 28px; }
+        .val-bg { font-family: 'VT323', monospace; font-size: 1.8rem; color: var(--lcd-dim); z-index: 1; position: absolute; top: 0; }
+        .val-act { font-family: 'VT323', monospace; font-size: 1.8rem; color: var(--lcd-glow); z-index: 5; text-shadow: 0 0 8px rgba(0, 242, 254, 0.6); position: relative; }
+
+        /* --- GRAFIK --- */
+        .fft-panel h4 { margin: 0 0 6px 0; font-size: 0.7rem; color: var(--osc-green); letter-spacing: 1px; text-transform: uppercase; }
+        .fft-container { background: #ffffff; border: 1px solid #30363d; height: 120px; position: relative; border-radius: 4px; padding: 2px; box-sizing: border-box; }
+
+        /* --- THERMOMETER --- */
+        .temp-panel h4 { margin: 0 0 10px 0; font-size: 0.8rem; color: var(--accent-color); letter-spacing: 2px; text-transform: uppercase; }
+        .temp-content-wrapper { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; flex-direction: column;}
+        .thermometer-svg { height: 120px; width: auto; margin-bottom: 10px; }
+        .temp-value-display { font-size: 2.8rem; font-weight: 800; color: var(--warning-red); font-family: 'VT323', monospace; text-shadow: 0 0 10px rgba(226, 79, 50, 0.4); line-height: 1;}
+    </style>
+</head>
+<body>
+    
+    <svg id="connector-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></svg>
+
+    <button id="connectBtn" class="btn-connect">CONNECT VIA UART</button>
+    <div id="connStatus" class="conn-status">Status: Disconnected</div>
+
+    <div class="motor-group" id="motorGroup">
+        <img src="gbr.png" alt="Motor 3 Fasa" class="motor-display" id="motorImage" onerror="this.src='https://via.placeholder.com/450x300/222/00d4ff?text=Motor+Display'">
+        <div class="fan-container">
+            <div class="fan-circle">
+                <svg id="motorFan" class="spinning" viewBox="0 0 177 174">
+                    <path d="M104 16 C109.41 19.92 111.54 23.43 113 30 C113.21 32.72 113.33 35.29 113.31 38 C113.33 38.67 113.34 39.35 113.36 40.04 C113.37 46.51 111.82 51.05 107.38 55.81 C106.59 56.53 105.81 57.26 105 58 C104.51 59 104.51 59 104 60 C107.63 63.01 107.63 63.01 112.03 63.91 C114.76 62.65 115.41 61.09 116.75 58.44 C117.18 57.61 117.61 56.78 118.05 55.93 C118.52 54.98 118.52 54.98 119 54 C119.66 54 120.32 54 121 54 C121.16 52.97 121.16 52.97 121.33 51.91 C124.26 34.57 124.26 34.57 129 31 C133.94 30.29 138.16 31.74 142.13 34.63 C143.44 35.72 144.73 36.85 146 38 C146.63 38.55 147.26 39.1 147.91 39.67 C153.36 44.73 157.64 51.15 158.2 58.74 C158.23 60.29 158.23 60.29 158.25 61.88 C158.29 63.42 158.29 63.42 158.33 64.99 C157.95 68.43 156.96 70.19 155 73 C154.32 73.99 153.64 74.98 152.94 76 C149.51 80.05 144.79 81.94 140 84 C139.19 84.37 138.37 84.75 137.54 85.13 C134.69 86.11 132.44 86.23 129.44 86.19 C128.04 86.18 128.04 86.18 126.62 86.17 C124 86 124 86 120 85 C120 88.3 120 91.6 120 95 C129.19 95.3 138.19 94.75 147.13 92.45 C149.12 91.97 150.95 91.76 153 91.69 C153.99 91.63 153.99 91.63 155 91.57 C158.05 92.22 159.15 93.53 161 96 C162.73 105.28 160.72 113.95 156 122 C152.16 127.33 148.3 131.71 142 134 C141.38 134.23 140.76 134.45 140.13 134.69 C132.58 135.8 126.65 134.8 120 131 C117.08 128.54 114.54 125.85 112 123 C111.18 122.2 111.18 122.2 110.35 121.38 C107.4 118.37 107 116.21 107 112 C104.03 112.99 101.06 113.98 98 115 C99.58 125.29 108.95 135.16 116.23 142.14 C118 144 118 144 118.63 146.94 C117.92 150.4 116.81 151.75 113.98 153.84 C104.34 159.5 93.22 161.8 82.21 159.39 C75.72 157.16 72.51 153.77 69 148 C68.34 147.01 67.68 146.02 67 145 C65.89 134.88 66.73 125.95 72 117 C72.99 115.99 73.99 114.99 75 114 C75 113.34 75 112.68 75 112 C74.01 111.67 73.02 111.34 72 111 C71.34 110.01 70.68 109.02 70 108 C68.05 108.24 68.05 108.24 66 109 C64.79 110.53 64.79 110.53 64 112.5 C63.51 113.59 63.51 113.59 63 114.7 C62.67 115.46 62.34 116.22 62 117 C61.67 117.7 61.34 118.39 61 119.11 C58.53 124.41 56.71 129.8 55.03 135.4 C53.99 138.03 53.31 139.38 51 141 C44.78 141.91 39.86 139.17 35 135.6 C28.26 130.22 23.31 123.68 22 115 C21.37 108.19 22.05 102.69 26.48 97.15 C31.68 91.56 38.41 87.19 46.21 86.87 C48.06 86.87 48.06 86.87 49.94 86.88 C51.16 86.87 52.39 86.87 53.65 86.87 C56.33 86.97 58.47 87.2 61 88 C60.98 86.93 60.96 85.86 60.94 84.75 C60.99 81.8 61.22 79.77 62 77 C46.35 77.19 46.35 77.19 31.13 80.42 C27.66 81.37 25.42 81.07 22 80 C18.74 76.75 18.54 74.01 18.5 69.5 C18.69 60.98 20.91 53.74 26.38 47.13 C27.67 46.07 27.67 46.07 29 45 C29.55 44.49 30.1 43.98 30.66 43.45 C34.88 39.57 38.36 37.04 44.32 36.97 C55.36 37.63 62.51 43.11 70 51 C72.44 54.57 73.37 56.65 73 61 C74.09 60.51 75.19 60.01 76.31 59.5 C80 58 80 58 83 58 C80.81 51.05 77.35 45.81 73 40 C72.34 39.07 71.68 38.14 71 37.19 C69.12 35.13 67.6 34.11 65.25 32.69 C63.19 31.26 62.18 30.47 61.27 28.12 C60.94 24.88 61.31 22.87 63.35 20.29 C74.78 10.69 90.98 9.23 104 16 Z " fill="#FFFFFF"/>
+                    <circle cx="88.5" cy="87" r="15" fill="#FAFBFB" />
+                </svg>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-grid">
+        <div class="temp-panel" id="panel-temp">
+            <h4>Motor Temp</h4>
+            <div class="temp-content-wrapper">
+                <svg class="thermheader-svg thermometer-svg" viewBox="450 350 150 500" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="515" y="380" width="35" height="400" rx="17.5" fill="#222" stroke="#444" stroke-width="2"/>
+                    <circle cx="532.5" cy="780" r="45" fill="#222" stroke="#444" stroke-width="2"/>
+                    <path id="cairan-merah" d="M568.32 711.68V408.32c0-20.48-16.64-37.12-37.12-37.12-20.48 0-37.12 16.64-37.12 37.12v303.36c-21.76 12.8-37.12 35.84-37.12 64 0 40.96 33.28 72.96 72.96 72.96 40.96 0 72.96-33.28 72.96-72.96 1.28-26.88-12.8-51.2-34.56-64z" fill="#E24F32" style="transform-origin: 531px 800px; transition: transform 0.3s ease-out; transform: scaleY(0.3);" />
+                </svg>
+                <div class="temp-value-display">
+                    <span id="temp-val">00.0</span><span style="font-size: 1.2rem; color: #8b949e; margin-left: 3px;">°C</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-column">
+            <div class="fft-panel" id="panel-fft">
+                <h4>FFT Velocity Spectrum Analysis</h4>
+                <div class="fft-container">
+                    <canvas id="fftChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="vibration-panel" id="panel-vib">
+            <div class="vib-title">Vibration Monitor</div>
+            <div class="axis-container">
+                <span class="axis-label">V-RMS (mm/s)</span>
+                <div class="lcd-screen">
+                    <div class="val-group">
+                        <div class="val-bg">88.88</div>
+                        <div class="val-act" id="v-val">00.00</div>
+                    </div>
+                </div>
+            </div>
+            <div class="axis-container">
+                <span class="axis-label">V-PEAK (mm/s)</span>
+                <div class="lcd-screen">
+                    <div class="val-group">
+                        <div class="val-bg">88.88</div>
+                        <div class="val-act" id="h-val">00.00</div>
+                    </div>
+                </div>
+            </div>
+            <div class="axis-container" style="margin-bottom: 0;">
+                <span class="axis-label">Status Mesin</span>
+                <div class="lcd-screen" style="background-color: #0b1212; justify-content: center;">
+                    <div class="val-group">
+                        <div class="val-act" id="status-val" style="color: var(--safe-green); font-size: 1.4rem; text-shadow: none;">READY</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="gauge-container" id="panel-rpm">
+            <div class="gauge-bezel">
+                <div class="gauge-body">
+                    <div class="color-arc"></div>
+                    <div id="ticks" class="ticks-container"></div>
+                    <div id="needle" class="needle"></div>
+                    <div id="needle-pivot" class="needle-pivot"></div>
+                    <div class="data-display">
+                        <div id="rpm-val">0</div>
+                        <div class="label-rpm">RPM x1000</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // =========================================================
+        // 1. PENGATURAN POSISI TITIK GARIS PENGHUBUNG (ADJUSTABLE)
+        // =========================================================
+        // Nilai X dan Y menggunakan skala 0.0 sampai 1.0 
+        // Contoh: x: 0.5 berarti di tengah secara horizontal. y: 0.5 berarti di tengah vertikal.
+        // Ubah angka-angka ini agar titik penunjuk pas dengan bentuk gbr.png milikmu
+        const TARGET_OFFSETS = {
+            temp: { x: 0.070, y: 0.60 }, // Posisi titik untuk Suhu (misal: Bodi atas motor)
+            fft:  { x: 0.26, y: 0.38 }, // Posisi titik untuk FFT (misal: Area gulungan/bearing)
+            vib:  { x: 0.26, y: 0.38 }, // Posisi titik untuk Vibrasi (misal: Kaki/Mounting motor)
+            rpm:  { x: 0.90, y: 0.35 }  // Posisi titik untuk Kecepatan/RPM (misal: Area Shaft/Kipas)
+        };
+
+        // =========================================================
+        // 2. FUNGSI MENGGAMBAR GARIS PENGHUBUNG (SVG OVERLAY)
+        // =========================================================
+        function drawConnectors() {
+            const svg = document.getElementById('connector-canvas');
+            svg.innerHTML = ''; // Bersihkan garis lama saat layar diperbesar/diperkecil
+
+            const motorImage = document.getElementById('motorImage');
+            const motorRect = motorImage.getBoundingClientRect();
+
+            // Hitung posisi absolut target (titik ujung di motor) berdasarkan persentase
+            const targets = {
+                temp: { x: motorRect.left + (motorRect.width * TARGET_OFFSETS.temp.x), y: motorRect.top + (motorRect.height * TARGET_OFFSETS.temp.y) },
+                fft:  { x: motorRect.left + (motorRect.width * TARGET_OFFSETS.fft.x), y: motorRect.top + (motorRect.height * TARGET_OFFSETS.fft.y) },
+                vib:  { x: motorRect.left + (motorRect.width * TARGET_OFFSETS.vib.x), y: motorRect.top + (motorRect.height * TARGET_OFFSETS.vib.y) },
+                rpm:  { x: motorRect.left + (motorRect.width * TARGET_OFFSETS.rpm.x), y: motorRect.top + (motorRect.height * TARGET_OFFSETS.rpm.y) }
+            };
+
+            const panels = {
+                temp: document.getElementById('panel-temp'),
+                fft:  document.getElementById('panel-fft'),
+                vib:  document.getElementById('panel-vib'),
+                rpm:  document.getElementById('panel-rpm')
+            };
+
+            // Fungsi Helper membuat Path SVG (Garis patah siku)
+            function createLine(panel, targetPos, color) {
+                if (!panel || !targetPos) return;
+                const panelRect = panel.getBoundingClientRect();
+                
+                // Mulai garis dari bagian atas tengah masing-masing panel
+                const startX = panelRect.left + (panelRect.width / 2);
+                const startY = panelRect.top - 5; 
+
+                // Menentukan letak belokan garis (path)
+                const bendY = startY - 25; 
+                
+                const pathData = `M ${startX} ${startY} L ${startX} ${bendY} L ${targetPos.x} ${bendY} L ${targetPos.x} ${targetPos.y}`;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', pathData);
+                path.setAttribute('stroke', color);
+                path.setAttribute('class', 'connector-line');
+                path.style.filter = `drop-shadow(0 0 5px ${color})`;
+
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', targetPos.x);
+                circle.setAttribute('cy', targetPos.y);
+                circle.setAttribute('r', '5'); // Ukuran titik
+                circle.setAttribute('fill', color);
+                circle.setAttribute('class', 'connector-dot');
+                circle.style.filter = `drop-shadow(0 0 8px ${color})`;
+
+                svg.appendChild(path);
+                svg.appendChild(circle);
+            }
+
+            // Eksekusi pembuatan garis dengan warnanya masing-masing
+            createLine(panels.temp, targets.temp, '#e24f32'); // Suhu (Merah)
+            createLine(panels.fft, targets.fft, '#00d4ff');   // FFT (Biru Cyan)
+            createLine(panels.vib, targets.vib, '#ffbb00');   // Vibrasi (Kuning)
+            createLine(panels.rpm, targets.rpm, '#00ff55');   // RPM (Hijau)
+        }
+
+        // Panggil saat gambar motor selesai dimuat, dan saat window di-resize
+        window.addEventListener('load', () => { setTimeout(drawConnectors, 200); });
+        window.addEventListener('resize', drawConnectors);
+
+
+        // =========================================================
+        // 3. LOGIC LAMA: DATA PARAMETERS (DOMAIN FREKUENSI)
+        // =========================================================
+        const Fs = 3000; 
+        const N = 512;
+        const totalBins = N / 2; 
+
+        // =========================================================
+        // 4. LOGIC LAMA: GAUGE RPM ANATOMY
+        // =========================================================
+        const ticksContainer = document.getElementById('ticks');
+        const totalAngle = 240; 
+        const startAngle = -120;
+
+        for (let i = 0; i <= 50; i++) {
+            const angle = startAngle + (i / 50) * totalAngle;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tick-wrapper';
+            wrapper.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+            const tick = document.createElement('div');
+            tick.className = i % 5 === 0 ? 'tick major' : 'tick';
+            wrapper.appendChild(tick);
+            ticksContainer.appendChild(wrapper);
+
+            if (i % 5 === 0) {
+                const numValue = i / 10;
+                const label = document.createElement('div');
+                label.className = `number-label ${numValue >= 3 ? 'danger' : ''}`;
+                const radius = 105;
+                const rad = (angle - 90) * (Math.PI / 180);
+                const x = Math.cos(rad) * radius;
+                const y = Math.sin(rad) * radius;
+                label.style.transform = `translate(${x}px, ${y}px)`;
+                label.innerText = numValue;
+                ticksContainer.appendChild(label);
+            }
+        }
+
+        // =========================================================
+        // 5. LOGIC LAMA: UPDATE FUNGSI VISUAL HMI
+        // =========================================================
+        function setRPM(value) {
+            const needle = document.getElementById('needle');
+            const rpmText = document.getElementById('rpm-val');
+            const fan = document.getElementById('motorFan');
+            
+            let rpm = Math.min(Math.max(value, 0), 5000);
+            const degrees = (rpm / 5000) * totalAngle + startAngle;
+            needle.style.transform = `rotate(${degrees}deg)`;
+            rpmText.innerText = Math.round(rpm);
+            rpmText.style.color = rpm >= 3000 ? "#ff2200" : "#ffffff";
+
+            if(rpm > 10) {
+                fan.style.animationPlayState = "running";
+                let speedSec = 60 / rpm; 
+                fan.style.animationDuration = `${speedSec}s`;
+            } else {
+                fan.style.animationPlayState = "paused";
+            }
+        }
+
+        function updateTemperature(val) {
+            const display = document.getElementById('temp-val');
+            display.innerText = val.toFixed(1);
+            
+            const cairanMerah = document.getElementById('cairan-merah');
+            let scaleY = (val / 100) * 0.7 + 0.3;
+            if (scaleY > 1) scaleY = 1;
+            cairanMerah.style.transform = `scaleY(${scaleY})`;
+            
+            const color = val > 55 ? "#ff2200" : "#e24f32";
+            display.style.color = color;
+            cairanMerah.style.fill = color;
+        }
+
+        function updateIsoStatus(vRms) {
+            const statusEl = document.getElementById('status-val');
+            if(vRms <= 1.12) {
+                statusEl.innerText = "GOOD"; statusEl.style.color = "var(--safe-green)";
+            } else if(vRms <= 2.80) {
+                statusEl.innerText = "SATIS"; statusEl.style.color = "var(--accent-color)";
+            } else if(vRms <= 7.10) {
+                statusEl.innerText = "WARN"; statusEl.style.color = "var(--warning-yellow)";
+            } else {
+                statusEl.innerText = "DANGER"; statusEl.style.color = "var(--danger-red)";
+            }
+        }
+
+        // =========================================================
+        // 6. LOGIC LAMA: FFT GRAPH (CHART.JS)
+        // =========================================================
+        let fftChartInstance = null;
+        const fftLabels = [];
+        for(let k = 0; k < totalBins; k++) {
+            fftLabels.push(((k * Fs) / N).toFixed(1));
+        }
+
+        function renderUpdateChart(chartData) {
+            const ctx = document.getElementById('fftChart').getContext('2d');
+            
+            if (fftChartInstance) {
+                fftChartInstance.data.datasets[0].data = chartData;
+                fftChartInstance.update('none');
+            } else {
+                fftChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: fftLabels,
+                        datasets: [{ data: chartData, borderColor: '#0284c7', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.1 }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { display: false } }, animation: false,
+                        scales: {
+                            x: { ticks: { maxTicksLimit: 8, font: { size: 8 }, color: '#111' }, grid: { color: '#e5e7eb' } },
+                            y: { title: { display: true, text: 'Vel (mm/s)', font: { size: 8, weight: 'bold' }, color: '#444' }, ticks: { font: { size: 8 }, color: '#111' }, grid: { color: '#e5e7eb' }, min: 0 }
+                        }
+                    }
+                });
+            }
+        }
+
+        // =========================================================
+        // 7. LOGIC LAMA: CORE DRIVER WEB SERIAL API
+        // =========================================================
+        const connectBtn = document.getElementById('connectBtn');
+        const connStatus = document.getElementById('connStatus');
+        let port, reader;
+        let inputBuffer = "";
+        let packetCount = 0;
+
+        connectBtn.addEventListener('click', async () => {
+            if ('serial' in navigator) {
+                try {
+                    port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 115200 });
+                    
+                    connectBtn.innerText = "CONNECTED";
+                    connectBtn.classList.add('connected');
+                    connStatus.innerText = "Status: Connected, waiting for data...";
+                    
+                    const textDecoder = new TextDecoderStream();
+                    port.readable.pipeTo(textDecoder.writable);
+                    reader = textDecoder.readable.getReader();
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        if (value) {
+                            inputBuffer += value;
+                            if (inputBuffer.includes('\n')) {
+                                let lines = inputBuffer.split('\n');
+                                inputBuffer = lines.pop(); 
+                                for(let line of lines) {
+                                    if(line.trim().length > 0) parseSerialData(line);
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Serial Error: ", error);
+                    connStatus.innerText = "Status: Error - " + error.message;
+                }
+            } else {
+                alert("Browser tidak mendukung Web Serial API. Gunakan Chrome atau Edge.");
+            }
+        });
+
+        // PARSER JSON
+        function parseSerialData(dataString) {
+            dataString = dataString.trim();
+            try {
+                if (dataString.startsWith("{") && dataString.endsWith("}")) {
+                    const data = JSON.parse(dataString);
+                    
+                    let vRms  = parseFloat(data.v_rms) || 0;
+                    let vPeak = parseFloat(data.v_peak) || 0;
+                    let rpm   = parseFloat(data.rpm) || 0;
+                    let temp  = parseFloat(data.temp) || 0;
+
+                    // Update UI Teks & Visual
+                    document.getElementById('v-val').innerText = vRms.toFixed(2);
+                    document.getElementById('h-val').innerText = vPeak.toFixed(2);
+                    setRPM(rpm);
+                    updateTemperature(temp);
+                    updateIsoStatus(vRms);
+
+                    // Update Chart FFT Velocity
+                    if (data.v_chart && Array.isArray(data.v_chart)) {
+                        renderUpdateChart(data.v_chart);
+                    }
+
+                    // Update status koneksi
+                    packetCount++;
+                    let pktOk = data.pkt_ok ?? '-';
+                    let pktErr = data.pkt_err ?? '-';
+                    let lastAgo = data.last_pkt_ms_ago ?? '-';
+                    connStatus.innerText = `Status: Connected | Received ${packetCount} | V1 OK:${pktOk} ERR:${pktErr} | Last V1 pkt: ${lastAgo}ms ago`;
+                }
+            } catch (e) {
+                console.error("Parsing error:", e, "Raw:", dataString);
+            }
+        }
+
+        // Set keadaan awal saat web dibuka
+        setRPM(0); updateTemperature(0); 
+    </script>
+</body>
+</html>
