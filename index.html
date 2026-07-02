@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HMI SCADA - Motor Monitoring</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
 
@@ -44,19 +45,27 @@
             transition: fill 0.3s ease;
         }
 
-        /* --- TOMBOL KONEKSI UART SERIAL --- */
+        /* --- TOMBOL KONEKSI --- */
+        .conn-toolbar {
+            position: absolute; top: 15px; left: 15px; z-index: 100;
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+        }
         .btn-connect {
-            position: absolute; top: 15px; left: 15px; padding: 10px 20px;
+            padding: 10px 20px;
             background-color: #0078d4; color: white; border: none; border-radius: 6px;
-            font-weight: bold; cursor: pointer; z-index: 100;
+            font-weight: bold; cursor: pointer;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: background 0.2s;
         }
         .btn-connect:hover { background-color: #005a9e; }
         .btn-connect.connected { background-color: var(--safe-green); color: #111; }
+        .btn-connect.btn-mqtt { background-color: #7a3fe0; }
+        .btn-connect.btn-mqtt:hover { background-color: #5f2fb3; }
+        .btn-connect.btn-mqtt.connected { background-color: var(--safe-green); color: #111; }
+        .btn-connect:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* --- STATUS INFO (DEBUG KONEKSI) --- */
         .conn-status {
-            position: absolute; top: 15px; left: 200px; z-index: 100;
+            z-index: 100;
             color: #ccc; font-size: 0.75rem; font-family: monospace;
             background: rgba(0,0,0,0.4); padding: 8px 14px; border-radius: 6px;
         }
@@ -139,8 +148,11 @@
     
     <svg id="connector-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;"></svg>
 
-    <button id="connectBtn" class="btn-connect">CONNECT VIA UART</button>
-    <div id="connStatus" class="conn-status">Status: Disconnected</div>
+    <div class="conn-toolbar">
+        <button id="connectBtn" class="btn-connect">CONNECT VIA UART</button>
+        <button id="connectMqttBtn" class="btn-connect btn-mqtt">CONNECT VIA WIFI (MQTT)</button>
+        <div id="connStatus" class="conn-status">Status: Disconnected</div>
+    </div>
 
     <div class="motor-group" id="motorGroup">
         <img src="gbr.png" alt="Motor 3 Fasa" class="motor-display" id="motorImage" onerror="this.src='https://via.placeholder.com/450x300/222/00d4ff?text=Motor+Display'">
@@ -228,14 +240,11 @@
         // =========================================================
         // 1. PENGATURAN POSISI TITIK GARIS PENGHUBUNG (ADJUSTABLE)
         // =========================================================
-        // Nilai X dan Y menggunakan skala 0.0 sampai 1.0 
-        // Contoh: x: 0.5 berarti di tengah secara horizontal. y: 0.5 berarti di tengah vertikal.
-        // Ubah angka-angka ini agar titik penunjuk pas dengan bentuk gbr.png milikmu
         const TARGET_OFFSETS = {
-            temp: { x: 0.070, y: 0.60 }, // Posisi titik untuk Suhu (misal: Bodi atas motor)
-            fft:  { x: 0.26, y: 0.38 }, // Posisi titik untuk FFT (misal: Area gulungan/bearing)
-            vib:  { x: 0.26, y: 0.38 }, // Posisi titik untuk Vibrasi (misal: Kaki/Mounting motor)
-            rpm:  { x: 0.90, y: 0.35 }  // Posisi titik untuk Kecepatan/RPM (misal: Area Shaft/Kipas)
+            temp: { x: 0.070, y: 0.60 },
+            fft:  { x: 0.26, y: 0.38 },
+            vib:  { x: 0.26, y: 0.38 },
+            rpm:  { x: 0.90, y: 0.35 }
         };
 
         // =========================================================
@@ -243,12 +252,11 @@
         // =========================================================
         function drawConnectors() {
             const svg = document.getElementById('connector-canvas');
-            svg.innerHTML = ''; // Bersihkan garis lama saat layar diperbesar/diperkecil
+            svg.innerHTML = '';
 
             const motorImage = document.getElementById('motorImage');
             const motorRect = motorImage.getBoundingClientRect();
 
-            // Hitung posisi absolut target (titik ujung di motor) berdasarkan persentase
             const targets = {
                 temp: { x: motorRect.left + (motorRect.width * TARGET_OFFSETS.temp.x), y: motorRect.top + (motorRect.height * TARGET_OFFSETS.temp.y) },
                 fft:  { x: motorRect.left + (motorRect.width * TARGET_OFFSETS.fft.x), y: motorRect.top + (motorRect.height * TARGET_OFFSETS.fft.y) },
@@ -263,18 +271,12 @@
                 rpm:  document.getElementById('panel-rpm')
             };
 
-            // Fungsi Helper membuat Path SVG (Garis patah siku)
             function createLine(panel, targetPos, color) {
                 if (!panel || !targetPos) return;
                 const panelRect = panel.getBoundingClientRect();
-                
-                // Mulai garis dari bagian atas tengah masing-masing panel
                 const startX = panelRect.left + (panelRect.width / 2);
-                const startY = panelRect.top - 5; 
-
-                // Menentukan letak belokan garis (path)
-                const bendY = startY - 25; 
-                
+                const startY = panelRect.top - 5;
+                const bendY = startY - 25;
                 const pathData = `M ${startX} ${startY} L ${startX} ${bendY} L ${targetPos.x} ${bendY} L ${targetPos.x} ${targetPos.y}`;
 
                 const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -286,7 +288,7 @@
                 const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
                 circle.setAttribute('cx', targetPos.x);
                 circle.setAttribute('cy', targetPos.y);
-                circle.setAttribute('r', '5'); // Ukuran titik
+                circle.setAttribute('r', '5');
                 circle.setAttribute('fill', color);
                 circle.setAttribute('class', 'connector-dot');
                 circle.style.filter = `drop-shadow(0 0 8px ${color})`;
@@ -295,30 +297,27 @@
                 svg.appendChild(circle);
             }
 
-            // Eksekusi pembuatan garis dengan warnanya masing-masing
-            createLine(panels.temp, targets.temp, '#e24f32'); // Suhu (Merah)
-            createLine(panels.fft, targets.fft, '#00d4ff');   // FFT (Biru Cyan)
-            createLine(panels.vib, targets.vib, '#ffbb00');   // Vibrasi (Kuning)
-            createLine(panels.rpm, targets.rpm, '#00ff55');   // RPM (Hijau)
+            createLine(panels.temp, targets.temp, '#e24f32');
+            createLine(panels.fft, targets.fft, '#00d4ff');
+            createLine(panels.vib, targets.vib, '#ffbb00');
+            createLine(panels.rpm, targets.rpm, '#00ff55');
         }
 
-        // Panggil saat gambar motor selesai dimuat, dan saat window di-resize
         window.addEventListener('load', () => { setTimeout(drawConnectors, 200); });
         window.addEventListener('resize', drawConnectors);
 
-
         // =========================================================
-        // 3. LOGIC LAMA: DATA PARAMETERS (DOMAIN FREKUENSI)
+        // 3. DATA PARAMETERS (DOMAIN FREKUENSI)
         // =========================================================
-        const Fs = 3000; 
+        const Fs = 3000;
         const N = 512;
-        const totalBins = N / 2; 
+        const totalBins = N / 2;
 
         // =========================================================
-        // 4. LOGIC LAMA: GAUGE RPM ANATOMY
+        // 4. GAUGE RPM ANATOMY
         // =========================================================
         const ticksContainer = document.getElementById('ticks');
-        const totalAngle = 240; 
+        const totalAngle = 240;
         const startAngle = -120;
 
         for (let i = 0; i <= 50; i++) {
@@ -346,13 +345,13 @@
         }
 
         // =========================================================
-        // 5. LOGIC LAMA: UPDATE FUNGSI VISUAL HMI
+        // 5. UPDATE FUNGSI VISUAL HMI
         // =========================================================
         function setRPM(value) {
             const needle = document.getElementById('needle');
             const rpmText = document.getElementById('rpm-val');
             const fan = document.getElementById('motorFan');
-            
+
             let rpm = Math.min(Math.max(value, 0), 5000);
             const degrees = (rpm / 5000) * totalAngle + startAngle;
             needle.style.transform = `rotate(${degrees}deg)`;
@@ -361,7 +360,7 @@
 
             if(rpm > 10) {
                 fan.style.animationPlayState = "running";
-                let speedSec = 60 / rpm; 
+                let speedSec = 60 / rpm;
                 fan.style.animationDuration = `${speedSec}s`;
             } else {
                 fan.style.animationPlayState = "paused";
@@ -371,12 +370,12 @@
         function updateTemperature(val) {
             const display = document.getElementById('temp-val');
             display.innerText = val.toFixed(1);
-            
+
             const cairanMerah = document.getElementById('cairan-merah');
             let scaleY = (val / 100) * 0.7 + 0.3;
             if (scaleY > 1) scaleY = 1;
             cairanMerah.style.transform = `scaleY(${scaleY})`;
-            
+
             const color = val > 55 ? "#ff2200" : "#e24f32";
             display.style.color = color;
             cairanMerah.style.fill = color;
@@ -396,7 +395,7 @@
         }
 
         // =========================================================
-        // 6. LOGIC LAMA: FFT GRAPH (CHART.JS)
+        // 6. FFT GRAPH (CHART.JS)
         // =========================================================
         let fftChartInstance = null;
         const fftLabels = [];
@@ -406,7 +405,7 @@
 
         function renderUpdateChart(chartData) {
             const ctx = document.getElementById('fftChart').getContext('2d');
-            
+
             if (fftChartInstance) {
                 fftChartInstance.data.datasets[0].data = chartData;
                 fftChartInstance.update('none');
@@ -430,89 +429,204 @@
         }
 
         // =========================================================
-        // 7. LOGIC LAMA: CORE DRIVER WEB SERIAL API
+        // 7. SUMBER DATA — status tracking bersama (Serial / MQTT)
+        // =========================================================
+        let activeSource = null;      // 'serial' | 'mqtt' | null
+        let packetCount = 0;
+        const connStatus = document.getElementById('connStatus');
+
+        // Fungsi TUNGGAL untuk menerapkan data JSON ke seluruh UI,
+        // dipakai baik oleh jalur Web Serial (UART) maupun jalur MQTT (WiFi).
+        // Ini adalah titik pertemuan "program ESP -> program Web".
+        function applyMotorData(data, sourceLabel) {
+            let vRms  = parseFloat(data.v_rms)  || 0;
+            let vPeak = parseFloat(data.v_peak) || 0;
+            let rpm   = parseFloat(data.rpm)    || 0;
+            let temp  = parseFloat(data.temp)   || 0;
+
+            document.getElementById('v-val').innerText = vRms.toFixed(2);
+            document.getElementById('h-val').innerText = vPeak.toFixed(2);
+            setRPM(rpm);
+            updateTemperature(temp);
+            updateIsoStatus(vRms);
+
+            if (data.v_chart && Array.isArray(data.v_chart)) {
+                renderUpdateChart(data.v_chart);
+            }
+
+            packetCount++;
+            let pktOk   = data.pkt_ok ?? '-';
+            let pktErr  = data.pkt_err ?? '-';
+            let lastAgo = data.last_pkt_ms_ago ?? '-';
+            connStatus.innerText = `Status: Connected [${sourceLabel}] | Received ${packetCount} | V1 OK:${pktOk} ERR:${pktErr} | Last V1 pkt: ${lastAgo}ms ago`;
+        }
+
+        // =========================================================
+        // 8. JALUR A — WEB SERIAL API (kabel USB langsung ke ESP32)
         // =========================================================
         const connectBtn = document.getElementById('connectBtn');
-        const connStatus = document.getElementById('connStatus');
         let port, reader;
         let inputBuffer = "";
-        let packetCount = 0;
 
         connectBtn.addEventListener('click', async () => {
-            if ('serial' in navigator) {
-                try {
-                    port = await navigator.serial.requestPort();
-                    await port.open({ baudRate: 115200 });
-                    
-                    connectBtn.innerText = "CONNECTED";
-                    connectBtn.classList.add('connected');
-                    connStatus.innerText = "Status: Connected, waiting for data...";
-                    
-                    const textDecoder = new TextDecoderStream();
-                    port.readable.pipeTo(textDecoder.writable);
-                    reader = textDecoder.readable.getReader();
+            if (!('serial' in navigator)) {
+                alert("Browser tidak mendukung Web Serial API. Gunakan Chrome atau Edge.");
+                return;
+            }
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
 
-                    while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) break;
-                        if (value) {
-                            inputBuffer += value;
-                            if (inputBuffer.includes('\n')) {
-                                let lines = inputBuffer.split('\n');
-                                inputBuffer = lines.pop(); 
-                                for(let line of lines) {
-                                    if(line.trim().length > 0) parseSerialData(line);
-                                }
+                activeSource = 'serial';
+                connectBtn.innerText = "CONNECTED";
+                connectBtn.classList.add('connected');
+                connStatus.innerText = "Status: Connected (UART), waiting for data...";
+
+                const textDecoder = new TextDecoderStream();
+                port.readable.pipeTo(textDecoder.writable);
+                reader = textDecoder.readable.getReader();
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    if (value) {
+                        inputBuffer += value;
+                        if (inputBuffer.includes('\n')) {
+                            let lines = inputBuffer.split('\n');
+                            inputBuffer = lines.pop();
+                            for(let line of lines) {
+                                if(line.trim().length > 0) parseSerialLine(line);
                             }
                         }
                     }
-                } catch (error) {
-                    console.error("Serial Error: ", error);
-                    connStatus.innerText = "Status: Error - " + error.message;
                 }
-            } else {
-                alert("Browser tidak mendukung Web Serial API. Gunakan Chrome atau Edge.");
+            } catch (error) {
+                console.error("Serial Error: ", error);
+                connStatus.innerText = "Status: Error - " + error.message;
             }
         });
 
-        // PARSER JSON
-        function parseSerialData(dataString) {
+        function parseSerialLine(dataString) {
             dataString = dataString.trim();
             try {
                 if (dataString.startsWith("{") && dataString.endsWith("}")) {
                     const data = JSON.parse(dataString);
-                    
-                    let vRms  = parseFloat(data.v_rms) || 0;
-                    let vPeak = parseFloat(data.v_peak) || 0;
-                    let rpm   = parseFloat(data.rpm) || 0;
-                    let temp  = parseFloat(data.temp) || 0;
-
-                    // Update UI Teks & Visual
-                    document.getElementById('v-val').innerText = vRms.toFixed(2);
-                    document.getElementById('h-val').innerText = vPeak.toFixed(2);
-                    setRPM(rpm);
-                    updateTemperature(temp);
-                    updateIsoStatus(vRms);
-
-                    // Update Chart FFT Velocity
-                    if (data.v_chart && Array.isArray(data.v_chart)) {
-                        renderUpdateChart(data.v_chart);
-                    }
-
-                    // Update status koneksi
-                    packetCount++;
-                    let pktOk = data.pkt_ok ?? '-';
-                    let pktErr = data.pkt_err ?? '-';
-                    let lastAgo = data.last_pkt_ms_ago ?? '-';
-                    connStatus.innerText = `Status: Connected | Received ${packetCount} | V1 OK:${pktOk} ERR:${pktErr} | Last V1 pkt: ${lastAgo}ms ago`;
+                    applyMotorData(data, 'UART');
                 }
             } catch (e) {
-                console.error("Parsing error:", e, "Raw:", dataString);
+                console.error("Parsing error (serial):", e, "Raw:", dataString);
             }
         }
 
+        // =========================================================
+        // 9. JALUR B — MQTT VIA WIFI (HiveMQ Cloud, sesuai program ESP32)
+        // =========================================================
+        // Broker & topic harus SAMA PERSIS dengan konfigurasi di firmware
+        // ESP32 (lihat MQTT_HOST / MQTT_TOPIC_DATA di kode .ino).
+        // HiveMQ Cloud membuka WebSocket TLS di port 8884, path "/mqtt".
+        const MQTT_CONFIG = {
+            host: "ae06075337c34b7aba9ed701b46224ba.s1.eu.hivemq.cloud",
+            wsPort: 8884,
+            path: "/mqtt",
+            username: "Andremotor",
+            password: "Admin123",
+            topicData: "motor/monitor/data",
+            topicStatus: "motor/monitor/status"
+        };
+
+        const connectMqttBtn = document.getElementById('connectMqttBtn');
+        let mqttClientBrowser = null;
+
+        connectMqttBtn.addEventListener('click', () => {
+            if (mqttClientBrowser && mqttClientBrowser.connected) {
+                mqttClientBrowser.end(true);
+                mqttClientBrowser = null;
+                connectMqttBtn.innerText = "CONNECT VIA WIFI (MQTT)";
+                connectMqttBtn.classList.remove('connected');
+                connStatus.innerText = "Status: Disconnected";
+                activeSource = null;
+                return;
+            }
+
+            if (typeof mqtt === 'undefined') {
+                alert("Library MQTT belum termuat. Periksa koneksi internet halaman ini.");
+                return;
+            }
+
+            const url = `wss://${MQTT_CONFIG.host}:${MQTT_CONFIG.wsPort}${MQTT_CONFIG.path}`;
+            connStatus.innerText = "Status: Connecting to MQTT broker...";
+
+            mqttClientBrowser = mqtt.connect(url, {
+                username: MQTT_CONFIG.username,
+                password: MQTT_CONFIG.password,
+                clientId: "web-hmi-" + Math.random().toString(16).slice(2, 10),
+                clean: true,
+                reconnectPeriod: 3000,
+                connectTimeout: 8000
+            });
+
+            mqttClientBrowser.on('connect', () => {
+                activeSource = 'mqtt';
+                connectMqttBtn.innerText = "CONNECTED (MQTT)";
+                connectMqttBtn.classList.add('connected');
+                connStatus.innerText = "Status: Connected (MQTT), subscribing...";
+                console.log("[MQTT] Connected to broker, subscribing to:", MQTT_CONFIG.topicData, MQTT_CONFIG.topicStatus);
+
+                mqttClientBrowser.subscribe([MQTT_CONFIG.topicData, MQTT_CONFIG.topicStatus], { qos: 0 }, (err, granted) => {
+                    if (err) {
+                        console.error("[MQTT] Subscribe error:", err);
+                        connStatus.innerText = "Status: MQTT subscribe FAILED - " + err.message;
+                    } else {
+                        console.log("[MQTT] Subscribe granted:", granted);
+                        connStatus.innerText = "Status: Connected (MQTT), waiting for data... (subscribed OK)";
+                    }
+                });
+            });
+
+            // DEBUG: mqtt.js emits this for every raw packet the broker sends,
+            // even if it doesn't match a subscribed topic filter. Very useful
+            // to confirm whether ANY publish is arriving at all.
+            mqttClientBrowser.on('packetreceive', (packet) => {
+                if (packet.cmd === 'publish') {
+                    console.log("[MQTT] RAW packet received on topic:", packet.topic, "payload:", packet.payload.toString().slice(0, 200));
+                }
+            });
+
+            mqttClientBrowser.on('message', (topic, payload) => {
+                console.log("[MQTT] message() fired - topic:", topic, "len:", payload.length);
+                try {
+                    if (topic === MQTT_CONFIG.topicData) {
+                        const data = JSON.parse(payload.toString());
+                        applyMotorData(data, 'MQTT');
+                    } else if (topic === MQTT_CONFIG.topicStatus) {
+                        console.log("[MQTT] Device status:", payload.toString());
+                        connStatus.innerText = "Status: Device says: " + payload.toString();
+                    }
+                } catch (e) {
+                    console.error("[MQTT] Parsing error:", e, "Raw:", payload.toString());
+                }
+            });
+
+
+            mqttClientBrowser.on('error', (err) => {
+                console.error("MQTT Error:", err);
+                connStatus.innerText = "Status: MQTT Error - " + err.message;
+            });
+
+            mqttClientBrowser.on('reconnect', () => {
+                connStatus.innerText = "Status: MQTT reconnecting...";
+            });
+
+            mqttClientBrowser.on('close', () => {
+                if (activeSource === 'mqtt') {
+                    connectMqttBtn.innerText = "CONNECT VIA WIFI (MQTT)";
+                    connectMqttBtn.classList.remove('connected');
+                }
+            });
+        });
+
         // Set keadaan awal saat web dibuka
-        setRPM(0); updateTemperature(0); 
+        setRPM(0); updateTemperature(0);
     </script>
 </body>
 </html>
